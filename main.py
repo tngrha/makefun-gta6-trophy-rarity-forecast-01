@@ -11,9 +11,14 @@ Model, per trophy:
      and ln(players_tracked) on the same x; the predicted rate is
      100 * earners / tracked. This captures dilution: a trophy's rate can
      fall while its earners still grow, if tracked players grow faster.
-  3. Blend the two predictions in logit space, then shrink 25% toward the
-     last observed logit (persistence anchor). With fewer than 3 usable
-     reads, fall back to persistence.
+  3. Blend the two predictions in logit space, shrink 25% toward the last
+     observed logit (persistence anchor), and clamp the total predicted
+     move to +/-2.5 logit units from the last read. The clamp guards
+     against runaway extrapolation when a short, noisy history fits a
+     steep slope: on the logit scale a 2.5 move already spans, e.g.,
+     1% -> 12% or 50% -> 92%, more than any trophy plausibly travels in
+     the remaining launch week. With fewer than 3 usable reads, fall
+     back to persistence.
   4. Spread: sigma = sqrt((0.65 * sqrt(horizon_days))^2 + resid^2), where
      resid is the logit fit's residual SD (floored). Trophies stuck at 0%
      get a 1.5x wider spread: emergence from zero is the costliest miss on
@@ -37,6 +42,7 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 LAUNCH = datetime(2026, 11, 19, 0, 0, tzinfo=timezone.utc)
+MAX_LOGIT_MOVE = 2.5
 
 
 def clamp(x: float) -> float:
@@ -119,6 +125,10 @@ def forecast_trophy(case, idx, x_target, horizon_days):
         else:
             blend = 0.5 * trend_logit + 0.5 * ratio_logit
         median_logit = 0.75 * blend + 0.25 * last_logit
+        # Clamp the predicted move: a steep fit on a short history must not
+        # extrapolate a trophy across the whole logit range in one week.
+        median_logit = min(last_logit + MAX_LOGIT_MOVE,
+                           max(last_logit - MAX_LOGIT_MOVE, median_logit))
 
     sigma = math.sqrt((0.65 * math.sqrt(horizon_days)) ** 2 + max(resid, 0.15) ** 2)
     if all(r == 0 for r in rates):
